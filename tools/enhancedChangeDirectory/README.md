@@ -13,20 +13,16 @@ bash scripts/build.sh        # POSIX
 `build/` will contain:
 ```
 tcd(.exe)
-shell/{tcd.bat, tcd.ps1, tcd.sh}
-config.json            drop-in starter (Dracula theme)
-config.example.json    full reference, every option documented
+shell/{tcd.bat | tcd.sh}      # bat on Windows, sh on POSIX
+config.json                   drop-in starter (Dracula theme)
+config.example.json           full reference, every option documented
 ```
-
-Add `build/shell/` to your `PATH`. The wrappers auto-detect `tcd(.exe)` one folder up — no `TCD_BIN` needed if you keep the layout. Then activate the function for your shell:
 
 | Shell | One-time |
 |---|---|
-| **cmd.exe**     | nothing — `tcd.bat` is on PATH |
-| **PowerShell**  | add `. <path>\shell\tcd.ps1` to `$PROFILE` (`notepad $PROFILE`) |
-| **bash / zsh**  | add `source <path>/shell/tcd.sh` to `~/.bashrc` / `~/.zshrc` |
+| **Windows (cmd.exe)** | add `<path>\shell\tcd.bat` is on PATH; type `tcd` |
+| **bash / zsh**        | add `source <path>/shell/tcd.sh` to `~/.bashrc` / `~/.zshrc` |
 
-> Override the binary location with `TCD_BIN` (POSIX) or `$env:TCD_BIN` (PowerShell) if you don't want the parent-folder layout.
 
 ## Usage
 

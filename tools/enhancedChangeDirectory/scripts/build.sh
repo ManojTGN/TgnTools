@@ -10,8 +10,8 @@ CC="${CC:-cc}"
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 OUT_DIR="build"
-rm -rf "$OUT_DIR"
-mkdir -p "$OUT_DIR"
+mkdir -p "$OUT_DIR" "$OUT_DIR/shell"
+find "$OUT_DIR" -maxdepth 2 -type f -delete 2>/dev/null || true
 
 BIN="$TOOL_NAME"
 case "$OS_LABEL" in
@@ -32,7 +32,7 @@ EOF
 
 "$CC" \
   -O2 -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation \
-  -std=c99 \
+  -std=gnu99 \
   -include "$OUT_DIR/_build_info.h" \
   -o "$OUT_DIR/$BIN" \
   src/term.c src/input.c src/fs.c src/json.c src/config.c src/ui.c src/main.c \
@@ -48,7 +48,6 @@ mkdir -p "$OUT_DIR/shell"
 case "$OS_LABEL" in
     windows)
         cp shell/tcd.bat "$OUT_DIR/shell/" 2>/dev/null || true
-        cp shell/tcd.ps1 "$OUT_DIR/shell/" 2>/dev/null || true
         ;;
     *)
         cp shell/tcd.sh  "$OUT_DIR/shell/" 2>/dev/null || true

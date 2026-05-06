@@ -10,8 +10,13 @@ if (-not $Commit) { $Commit = 'unknown' }
 
 $Bin = "$ToolName.exe"
 $OutDir = 'build'
-if (Test-Path $OutDir) { Remove-Item -Recurse -Force $OutDir }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+Get-ChildItem -Path $OutDir -File -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+if (Test-Path "$OutDir/shell") {
+    Get-ChildItem -Path "$OutDir/shell" -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
 
 $Cc = if ($env:CC) { $env:CC } else { 'gcc' }
 if (-not (Get-Command $Cc -ErrorAction SilentlyContinue)) {
@@ -34,7 +39,7 @@ Set-Content -Path $buildInfoPath -Value $buildInfo -Encoding ascii
 
 $gccArgs = @(
     '-O2','-Wall','-Wextra','-Wno-unused-parameter','-Wno-format-truncation',
-    '-std=c99',
+    '-std=gnu99',
     '-include',$buildInfoPath,
     '-o',"$OutDir/$Bin"
 ) + $sources + @('-lshell32','-lole32','-luuid')
@@ -51,7 +56,6 @@ Copy-Item config.json         "$OutDir/" -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path "$OutDir/shell" | Out-Null
 if ($OsLabel -eq 'windows') {
     Copy-Item shell/tcd.bat "$OutDir/shell/" -ErrorAction SilentlyContinue
-    Copy-Item shell/tcd.ps1 "$OutDir/shell/" -ErrorAction SilentlyContinue
 } else {
     Copy-Item shell/tcd.sh  "$OutDir/shell/" -ErrorAction SilentlyContinue
 }
