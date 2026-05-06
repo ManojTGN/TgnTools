@@ -1,0 +1,139 @@
+name: Build Tool
+
+on:
+    workflow_dispatch:
+        inputs:
+            tool:
+                description: "Tool name (directory under tools/)"
+                required: true
+                type: string
+            version:
+                description: "Version label (defaults to short commit SHA)"
+                required: false
+                type: string
+
+permissions:
+    contents: read
+
+jobs:
+    build:
+        name: ${{ inputs.tool }} on ${{ matrix.os_label }}-${{ matrix.arch }}
+        runs-on: ${{ matrix.os }}
+
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - os:        ubuntu-latest
+                      os_label:  linux
+                      arch:      x64
+                    - os:        windows-latest
+                      os_label:  windows
+                      arch:      x64
+                    - os:        macos-latest
+                      os_label:  macos
+                      arch:      arm64
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Resolve tool manifest
+              id: manifest
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  TOOL_DIR="tools/${{ inputs.tool }}"
+                  if [ ! -d "$TOOL_DIR" ]; then
+                      echo "::error::Tool '${{ inputs.tool }}' not found at $TOOL_DIR"
+                      exit 1
+                  fi
+
+                  MANIFEST="$TOOL_DIR/tool.yml"
+                  if [ ! -f "$MANIFEST" ]; then
+                      echo "::error::Missing manifest: $MANIFEST"
+                      exit 1
+                  fi
+
+                  LANGUAGE=$(grep -E '^language:' "$MANIFEST" | head -1 \
+                      | sed -E 's/^language:[[:space:]]*//' \
+                      | tr -d '"' | tr -d "'" | tr -d '\r')
+                  if [ -z "$LANGUAGE" ]; then
+                      echo "::error::No 'language:' field in $MANIFEST"
+                      exit 1
+                  fi
+
+                  RESOLVED_VERSION="${{ inputs.version }}"
+                  if [ -z "$RESOLVED_VERSION" ]; then
+                      RESOLVED_VERSION="${GITHUB_SHA::7}"
+                  fi
+
+                  {
+                      echo "language=$LANGUAGE"
+                      echo "tool_dir=$TOOL_DIR"
+                      echo "version=$RESOLVED_VERSION"
+                  } >> "$GITHUB_OUTPUT"
+
+                  echo "Resolved tool=${{ inputs.tool }} language=$LANGUAGE version=$RESOLVED_VERSION"
+
+            # ----- toolchain setup (only one runs, gated by language) -----
+
+            - name: Setup Go
+              if: steps.manifest.outputs.language == 'go'
+              uses: actions/setup-go@v5
+              with:
+                  go-version-file: ${{ steps.manifest.outputs.tool_dir }}/go.mod
+
+            - name: Setup Node.js
+              if: steps.manifest.outputs.language == 'node'
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+
+            - name: Setup Python
+              if: steps.manifest.outputs.language == 'python'
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.12"
+
+            - name: Setup Rust
+              if: steps.manifest.outputs.language == 'rust'
+              uses: dtolnay/rust-toolchain@stable
+
+            # C/C++ and shell-based tools use the runner's pre-installed toolchain
+            # (gcc on linux, clang on macos, MinGW gcc on windows-latest).
+
+            # ----- build -----
+
+            - name: Build (POSIX)
+              if: runner.os != 'Windows'
+              shell: bash
+              working-directory: ${{ steps.manifest.outputs.tool_dir }}
+              env:
+                  TOOL_NAME: ${{ inputs.tool }}
+                  OS_LABEL:  ${{ matrix.os_label }}
+                  ARCH:      ${{ matrix.arch }}
+                  VERSION:   ${{ steps.manifest.outputs.version }}
+              run: bash scripts/build.sh
+
+            - name: Build (Windows)
+              if: runner.os == 'Windows'
+              shell: pwsh
+              working-directory: ${{ steps.manifest.outputs.tool_dir }}
+              env:
+                  TOOL_NAME: ${{ inputs.tool }}
+                  OS_LABEL:  ${{ matrix.os_label }}
+                  ARCH:      ${{ matrix.arch }}
+                  VERSION:   ${{ steps.manifest.outputs.version }}
+              run: ./scripts/build.ps1
+
+            # ----- artifact -----
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: ${{ inputs.tool }}-${{ matrix.os_label }}-${{ matrix.arch }}
+                  path: ${{ steps.manifest.outputs.tool_dir }}/build/
+                  if-no-files-found: error
+                  retention-days: 30

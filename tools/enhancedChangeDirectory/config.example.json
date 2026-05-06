@@ -1,0 +1,49 @@
+{
+    "show_index":      true,
+    "show_hidden":     false,
+    "show_size":       false,
+    "per_page":        20,
+    "wrap_navigation": false,
+    "sort":            "dirs_first",
+
+    "theme": "default",
+
+    "themes": [
+        {
+            "preset":      "default",
+            "foreground":  "default",
+            "background":  "default",
+            "header_fg":   "bright_cyan",
+            "footer_fg":   "gray",
+            "path_fg":     "bright_white",
+            "index_fg":    "gray",
+            "file_fg":     "default",
+            "dir_fg":      "bright_blue",
+            "match_fg":    "bright_yellow",
+            "selected_fg": "black",
+            "selected_bg": "bright_cyan",
+            "border_fg":   "gray",
+            "filter_fg":   "bright_yellow",
+            "hint_fg":     "gray",
+            "key_fg":      "bright_yellow"
+        }
+    ],
+
+    "keys": {
+        "up":             ["up"],
+        "down":           ["down"],
+        "enter":          ["enter", "right"],
+        "back":           ["left"],
+        "commit":         ["ctrl+enter"],
+        "commit_explore": ["ctrl+shift+enter"],
+        "cancel":         ["esc"],
+        "drives":         ["tab"],
+        "quit":           ["ctrl+c"],
+        "top":            ["home"],
+        "bottom":         ["end"],
+        "page_up":        ["pageup"],
+        "page_down":      ["pagedown"],
+        "toggle_hidden":  ["ctrl+h"],
+        "clear_filter":   ["ctrl+u"]
+    }
+}
