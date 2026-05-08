@@ -4,4 +4,4 @@ description: Cross-platform global-hotkey daemon - press a shortcut, run a comma
 language: c
 maintainer: ManojTGN
 
-os: []
+#os: [windows, linux, macos] --- IGNORE ---
