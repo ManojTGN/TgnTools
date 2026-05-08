@@ -44,4 +44,10 @@ const char *json_get_string(json_value *obj, const char *key, const char *fallba
 double json_get_number(json_value *obj, const char *key, double fallback);
 int json_get_bool(json_value *obj, const char *key, int fallback);
 
+json_value *json_make_string(const char *s);
+json_value *json_make_object(void);
+int json_object_set(json_value *obj, const char *key, json_value *value);
+
+int json_write_to_file(const json_value *root, const char *path);
+
 #endif

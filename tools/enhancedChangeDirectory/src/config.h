@@ -29,6 +29,12 @@ typedef struct {
 } tcd_keybind;
 
 typedef struct {
+    char **names;
+    char **paths;
+    size_t count;
+} tcd_bookmarks;
+
+typedef struct {
     int show_index;
     int show_hidden;
     int show_size;
@@ -55,6 +61,9 @@ typedef struct {
     tcd_keybind k_page_down;
     tcd_keybind k_toggle_hidden;
     tcd_keybind k_clear_filter;
+    tcd_keybind k_save_bookmark;
+
+    tcd_bookmarks bookmarks;
 } tcd_config;
 
 tcd_config *config_load(const char *override_path, char *err, size_t err_sz);
@@ -66,5 +75,8 @@ size_t config_built_in_theme_count(void);
 const char *config_built_in_theme_name(size_t index);
 
 int config_key_matches(const tcd_keybind *k, const char *name, int ctrl, int alt, int shift);
+
+const char *config_bookmark_get(const tcd_config *c, const char *name);
+int config_bookmark_save(const char *override_path, const char *name, const char *path);
 
 #endif

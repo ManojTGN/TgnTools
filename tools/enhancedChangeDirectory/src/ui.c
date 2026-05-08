@@ -13,7 +13,8 @@
 
 typedef enum {
     MODE_BROWSE,
-    MODE_LOCATIONS
+    MODE_LOCATIONS,
+    MODE_SAVE_BOOKMARK
 } view_mode;
 
 typedef enum {
@@ -53,6 +54,9 @@ typedef struct {
     int term_cols, term_rows;
 
     int show_hidden_runtime;
+
+    char save_input[MAX_FILTER];
+    int save_input_len;
 } ui_state;
 
 static int icontains(const char *hay, const char *needle) {
@@ -174,15 +178,22 @@ static void draw_filter_line(ui_state *st) {
     } else if (st->mode == MODE_LOCATIONS) {
         term_set_fg(theme(st)->hint_fg);
         term_write("(locations)");
+    } else if (st->mode == MODE_SAVE_BOOKMARK) {
+        term_set_fg(theme(st)->key_fg);
+        term_write("save bookmark as: ");
+        term_set_fg(theme(st)->filter_fg);
+        term_write(st->save_input);
+        term_set_fg(theme(st)->hint_fg);
+        term_write("_");
     }
 
     int total, top;
-    if (st->mode == MODE_BROWSE) {
-        total = (int)st->visible_count;
-        top = st->top;
-    } else {
+    if (st->mode == MODE_LOCATIONS) {
         total = (int)st->locations_count;
         top = st->loc_top;
+    } else {
+        total = (int)st->visible_count;
+        top = st->top;
     }
     int per = max_visible_rows(st);
     int from = total > 0 ? top + 1 : 0;
@@ -312,13 +323,15 @@ static void draw_footer(ui_state *st) {
     if (st->mode == MODE_LOCATIONS) {
         draw_footer_kv(st, "enter", "open");
         draw_footer_kv(st, "esc",   "back");
+    } else if (st->mode == MODE_SAVE_BOOKMARK) {
+        draw_footer_kv(st, "enter", "save");
+        draw_footer_kv(st, "esc",   "cancel");
+        draw_footer_kv(st, "bksp",  "edit");
     } else {
-        draw_footer_kv(st, "enter",            "open");
-        draw_footer_kv(st, "ctrl+enter",       "cd");
-        draw_footer_kv(st, "ctrl+shift+enter", "cd+explore");
-        draw_footer_kv(st, "esc",              "cancel");
-        draw_footer_kv(st, "tab",              "locations");
-        draw_footer_kv(st, "bksp",             "parent");
+        draw_footer_kv(st, "ctrl+enter", "cd");
+        draw_footer_kv(st, "esc",        "cancel");
+        draw_footer_kv(st, "tab",        "locations");
+        draw_footer_kv(st, "ctrl+s",     "save bookmark");
     }
     term_reset_attrs();
 }
@@ -357,8 +370,8 @@ static void clamp_view_locations(ui_state *st) {
 
 static void render(ui_state *st) {
     term_get_size(&st->term_cols, &st->term_rows);
-    if (st->mode == MODE_BROWSE) clamp_view_browse(st);
-    else                          clamp_view_locations(st);
+    if (st->mode == MODE_LOCATIONS) clamp_view_locations(st);
+    else                            clamp_view_browse(st);
 
     term_set_fg(theme(st)->foreground);
     term_set_bg(theme(st)->background);
@@ -371,7 +384,7 @@ static void render(ui_state *st) {
     int per = max_visible_rows(st);
     int start_row = 4;
 
-    if (st->mode == MODE_BROWSE) {
+    if (st->mode != MODE_LOCATIONS) {
         if (st->visible_count == 0) {
             term_move(start_row, 1);
             term_set_bg(theme(st)->background);
@@ -471,6 +484,35 @@ static void filter_backspace(char *buf, int *len) {
     buf[*len] = 0;
 }
 
+static const char *path_basename(const char *path) {
+    if (!path || !*path) return "";
+    const char *last = path;
+    for (const char *p = path; *p; p++) {
+        if ((*p == '/' || *p == '\\') && *(p + 1)) last = p + 1;
+    }
+    return last;
+}
+
+static int is_safe_bookmark_char(uint32_t ch) {
+    if (ch >= 'a' && ch <= 'z') return 1;
+    if (ch >= 'A' && ch <= 'Z') return 1;
+    if (ch >= '0' && ch <= '9') return 1;
+    if (ch == '-' || ch == '_' || ch == '.') return 1;
+    return 0;
+}
+
+static void enter_save_bookmark_mode(ui_state *st) {
+    const char *base = path_basename(st->cwd ? st->cwd : "");
+    int n = 0;
+    while (base[n] && n < MAX_FILTER - 1) {
+        st->save_input[n] = base[n];
+        n++;
+    }
+    st->save_input[n] = 0;
+    st->save_input_len = n;
+    st->mode = MODE_SAVE_BOOKMARK;
+}
+
 static input_action handle_browse(ui_state *st, key_event event) {
     const tcd_config *cfg = st->cfg;
 
@@ -553,6 +595,10 @@ static input_action handle_browse(ui_state *st, key_event event) {
         rebuild_visible(st);
         return ACTION_CONTINUE;
     }
+    if (key_matches_binding(&cfg->k_save_bookmark, &event)) {
+        enter_save_bookmark_mode(st);
+        return ACTION_CONTINUE;
+    }
 
     if (key_matches_binding(&cfg->k_enter, &event)) {
         if (st->visible_count == 0) return ACTION_CONTINUE;
@@ -632,6 +678,45 @@ static input_action handle_locations(ui_state *st, key_event event) {
     return ACTION_CONTINUE;
 }
 
+static input_action handle_save_bookmark(ui_state *st, key_event event) {
+    if (event.type == KEY_INTERRUPT) return ACTION_INTERRUPT;
+
+    if (event.type == KEY_ESC) {
+        st->mode = MODE_BROWSE;
+        return ACTION_CONTINUE;
+    }
+
+    if (event.type == KEY_BACKSPACE) {
+        if (st->save_input_len > 0) {
+            st->save_input_len--;
+            st->save_input[st->save_input_len] = 0;
+        }
+        return ACTION_CONTINUE;
+    }
+
+    if (event.type == KEY_ENTER) {
+        if (st->save_input_len == 0) {
+            st->mode = MODE_BROWSE;
+            return ACTION_CONTINUE;
+        }
+        if (st->cwd) {
+            config_bookmark_save(NULL, st->save_input, st->cwd);
+        }
+        st->mode = MODE_BROWSE;
+        return ACTION_CONTINUE;
+    }
+
+    if (event.type == KEY_CHAR && !event.ctrl && !event.alt
+        && is_safe_bookmark_char(event.ch)
+        && st->save_input_len < MAX_FILTER - 1)
+    {
+        st->save_input[st->save_input_len++] = (char)event.ch;
+        st->save_input[st->save_input_len] = 0;
+    }
+
+    return ACTION_CONTINUE;
+}
+
 int ui_run(const tcd_config *cfg, const char *initial_path,
            char **out_chosen, int *out_open_explorer) {
     ui_state st;
@@ -663,9 +748,13 @@ int ui_run(const tcd_config *cfg, const char *initial_path,
         key_event k = input_read();
         if (k.type == KEY_NONE) continue;
         if (k.type == KEY_RESIZE) continue;
-        input_action action = (st.mode == MODE_BROWSE)
-            ? handle_browse(&st, k)
-            : handle_locations(&st, k);
+        input_action action;
+        switch (st.mode) {
+            case MODE_BROWSE:        action = handle_browse(&st, k);        break;
+            case MODE_LOCATIONS:     action = handle_locations(&st, k);     break;
+            case MODE_SAVE_BOOKMARK: action = handle_save_bookmark(&st, k); break;
+            default:                 action = ACTION_CONTINUE;               break;
+        }
 
         if (action == ACTION_COMMIT || action == ACTION_COMMIT_EXPLORE) {
             size_t len = strlen(st.cwd);

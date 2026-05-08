@@ -380,3 +380,131 @@ int json_get_bool(json_value *obj, const char *key, int fallback) {
     if (v->type != JSON_BOOL && v->type != JSON_NUMBER) return fallback;
     return json_bool(v);
 }
+
+json_value *json_make_string(const char *s) {
+    json_value *v = (json_value *)calloc(1, sizeof(json_value));
+    if (!v) return NULL;
+    v->type = JSON_STRING;
+    size_t len = s ? strlen(s) : 0;
+    v->v.string = (char *)malloc(len + 1);
+    if (!v->v.string) { free(v); return NULL; }
+    if (s) memcpy(v->v.string, s, len);
+    v->v.string[len] = 0;
+    return v;
+}
+
+json_value *json_make_object(void) {
+    json_value *v = (json_value *)calloc(1, sizeof(json_value));
+    if (!v) return NULL;
+    v->type = JSON_OBJECT;
+    return v;
+}
+
+int json_object_set(json_value *obj, const char *key, json_value *value) {
+    if (!obj || obj->type != JSON_OBJECT || !key || !value) return -1;
+
+    for (size_t i = 0; i < obj->v.object.count; i++) {
+        if (strcmp(obj->v.object.keys[i], key) == 0) {
+            json_free(obj->v.object.values[i]);
+            obj->v.object.values[i] = value;
+            return 0;
+        }
+    }
+
+    size_t new_count = obj->v.object.count + 1;
+    char **keys = (char **)realloc(obj->v.object.keys, new_count * sizeof(char *));
+    if (!keys) return -1;
+    obj->v.object.keys = keys;
+
+    json_value **values = (json_value **)realloc(obj->v.object.values, new_count * sizeof(json_value *));
+    if (!values) return -1;
+    obj->v.object.values = values;
+
+    size_t key_len = strlen(key);
+    char *key_copy = (char *)malloc(key_len + 1);
+    if (!key_copy) return -1;
+    memcpy(key_copy, key, key_len + 1);
+
+    obj->v.object.keys[obj->v.object.count] = key_copy;
+    obj->v.object.values[obj->v.object.count] = value;
+    obj->v.object.count = new_count;
+    return 0;
+}
+
+static void json_write_indent(FILE *f, int level) {
+    for (int i = 0; i < level; i++) fputs("    ", f);
+}
+
+static void json_write_string_escaped(FILE *f, const char *s) {
+    fputc('"', f);
+    if (s) {
+        for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+            unsigned char c = *p;
+            switch (c) {
+                case '"':  fputs("\\\"", f); break;
+                case '\\': fputs("\\\\", f); break;
+                case '\b': fputs("\\b", f);  break;
+                case '\f': fputs("\\f", f);  break;
+                case '\n': fputs("\\n", f);  break;
+                case '\r': fputs("\\r", f);  break;
+                case '\t': fputs("\\t", f);  break;
+                default:
+                    if (c < 0x20) fprintf(f, "\\u%04x", c);
+                    else fputc(c, f);
+                    break;
+            }
+        }
+    }
+    fputc('"', f);
+}
+
+static void json_write_value(FILE *f, const json_value *v, int level) {
+    if (!v) { fputs("null", f); return; }
+    switch (v->type) {
+        case JSON_NULL:   fputs("null", f); return;
+        case JSON_BOOL:   fputs(v->v.boolean ? "true" : "false", f); return;
+        case JSON_NUMBER: {
+            double n = v->v.number;
+            if (n == (double)(long long)n) fprintf(f, "%lld", (long long)n);
+            else                           fprintf(f, "%g", n);
+            return;
+        }
+        case JSON_STRING: json_write_string_escaped(f, v->v.string); return;
+        case JSON_ARRAY:
+            if (v->v.array.count == 0) { fputs("[]", f); return; }
+            fputs("[\n", f);
+            for (size_t i = 0; i < v->v.array.count; i++) {
+                json_write_indent(f, level + 1);
+                json_write_value(f, v->v.array.items[i], level + 1);
+                if (i + 1 < v->v.array.count) fputc(',', f);
+                fputc('\n', f);
+            }
+            json_write_indent(f, level);
+            fputc(']', f);
+            return;
+        case JSON_OBJECT:
+            if (v->v.object.count == 0) { fputs("{}", f); return; }
+            fputs("{\n", f);
+            for (size_t i = 0; i < v->v.object.count; i++) {
+                json_write_indent(f, level + 1);
+                json_write_string_escaped(f, v->v.object.keys[i]);
+                fputs(": ", f);
+                json_write_value(f, v->v.object.values[i], level + 1);
+                if (i + 1 < v->v.object.count) fputc(',', f);
+                fputc('\n', f);
+            }
+            json_write_indent(f, level);
+            fputc('}', f);
+            return;
+    }
+}
+
+int json_write_to_file(const json_value *root, const char *path) {
+    if (!path) return -1;
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    json_write_value(f, root, 0);
+    fputc('\n', f);
+    fclose(f);
+    return 0;
+}

@@ -6,12 +6,143 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#  include <windows.h>
+#endif
+
 #ifndef TCD_VERSION
 #  define TCD_VERSION "dev"
 #endif
 #ifndef TCD_COMMIT
 #  define TCD_COMMIT "unknown"
 #endif
+
+static void enable_ansi_on_stdout(void) {
+#ifdef _WIN32
+    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (handle == INVALID_HANDLE_VALUE) return;
+    DWORD mode = 0;
+    if (GetConsoleMode(handle, &mode)) {
+        SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
+#endif
+}
+
+static void repeat_string(const char *s, int count) {
+    for (int i = 0; i < count; i++) fputs(s, stdout);
+}
+
+static int print_config_view(void) {
+    enable_ansi_on_stdout();
+
+    char *path = config_resolve_path(NULL);
+    if (!path) {
+        fprintf(stderr, "tcd: cannot resolve config path\n");
+        return 1;
+    }
+
+    int exists = fs_exists(path);
+
+    long file_size = -1;
+    if (exists) {
+        FILE *f = fopen(path, "rb");
+        if (f) {
+            if (fseek(f, 0, SEEK_END) == 0) file_size = ftell(f);
+            fclose(f);
+        }
+    }
+
+    const char *cyan       = "\x1b[36m";
+    const char *bold_white = "\x1b[1;37m";
+    const char *gray       = "\x1b[90m";
+    const char *yellow     = "\x1b[33m";
+    const char *reset      = "\x1b[0m";
+
+    const char *horiz     = "\xe2\x94\x80"; /* ─ */
+    const char *corner_tl = "\xe2\x94\x8c"; /* ┌ */
+    const char *corner_tr = "\xe2\x94\x90"; /* ┐ */
+    const char *corner_bl = "\xe2\x94\x94"; /* └ */
+    const char *corner_br = "\xe2\x94\x98"; /* ┘ */
+    const char *vert      = "\xe2\x94\x82"; /* │ */
+
+    const char *status_text;
+    char size_buf[64];
+    if (exists) {
+        if (file_size >= 0) {
+            snprintf(size_buf, sizeof(size_buf), "%ld bytes", file_size);
+            status_text = size_buf;
+        } else {
+            status_text = "(unable to read size)";
+        }
+    } else {
+        status_text = "file does not exist - built-in defaults are used";
+    }
+
+    int path_cells   = (int)strlen(path);
+    int status_cells = (int)strlen(status_text);
+    int title_cells  = (int)strlen(" tcd config ");
+
+    /*
+     * Body row layout: │  <content><pad>  │  = content + pad + 6 cells.
+     * Top/bottom rows render `width` cells. So pad = width - content - 6 must
+     * be >= 0, i.e. inner (= width - 4) >= content + 2 for every content row.
+     */
+    int inner = path_cells   + 2;
+    if (status_cells + 2 > inner) inner = status_cells + 2;
+    if (title_cells  + 4 > inner) inner = title_cells  + 4;
+    const int min_inner = 66;
+    if (inner < min_inner) inner = min_inner;
+    int width = inner + 4;
+
+    /* Top border: ┌── tcd config ─...─┐ */
+    fputs(cyan, stdout);
+    fputs(corner_tl, stdout);
+    repeat_string(horiz, 2);
+    fputs(" tcd config ", stdout);
+    repeat_string(horiz, width - 16);
+    fputs(corner_tr, stdout);
+    fputs(reset, stdout);
+    putchar('\n');
+
+    /* Path line */
+    printf("%s%s%s  %s%s%s", cyan, vert, reset, bold_white, path, reset);
+    repeat_string(" ", inner - path_cells - 2);
+    printf("  %s%s%s\n", cyan, vert, reset);
+
+    /* Status line */
+    const char *status_color = exists ? gray : yellow;
+    printf("%s%s%s  %s%s%s", cyan, vert, reset, status_color, status_text, reset);
+    repeat_string(" ", inner - status_cells - 2);
+    printf("  %s%s%s\n", cyan, vert, reset);
+
+    /* Bottom border */
+    fputs(cyan, stdout);
+    fputs(corner_bl, stdout);
+    repeat_string(horiz, width - 2);
+    fputs(corner_br, stdout);
+    fputs(reset, stdout);
+    putchar('\n');
+
+    /* File contents below the box */
+    if (exists && file_size > 0) {
+        FILE *f = fopen(path, "rb");
+        if (f) {
+            putchar('\n');
+            char buf[4096];
+            size_t n;
+            int last_byte = 0;
+            while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+                fwrite(buf, 1, n, stdout);
+                last_byte = (unsigned char)buf[n - 1];
+            }
+            fclose(f);
+            if (last_byte != '\n') putchar('\n');
+        }
+    }
+
+    free(path);
+    return 0;
+}
 
 static void print_usage(void) {
     fprintf(stderr,
@@ -21,19 +152,17 @@ static void print_usage(void) {
         "\n"
         "Options:\n"
         "  [path]                 directory to start in (defaults to cwd)\n"
-        "  --config FILE          use FILE instead of the auto-discovered config\n"
-        "  --print-config-path    print the resolved config path and exit\n"
-        "  --list-themes          list built-in theme names and exit\n"
+        "  --config               print the resolved config file (path + contents)\n"
         "  --version, -V          print version and exit\n"
         "  --help, -h             show this help and exit\n");
 }
 
 int main(int argc, char **argv) {
     const char *initial = NULL;
-    const char *config_override = NULL;
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
+
         if (strcmp(a, "--help") == 0 || strcmp(a, "-h") == 0) {
             print_usage();
             return 0;
@@ -42,26 +171,8 @@ int main(int argc, char **argv) {
             printf("tcd %s (%s)\n", TCD_VERSION, TCD_COMMIT);
             return 0;
         }
-        if (strcmp(a, "--print-config-path") == 0) {
-            char *p = config_resolve_path(config_override);
-            if (p) { printf("%s\n", p); free(p); }
-            return 0;
-        }
-        if (strcmp(a, "--list-themes") == 0) {
-            size_t n = config_built_in_theme_count();
-            for (size_t i = 0; i < n; i++) {
-                const char *nm = config_built_in_theme_name(i);
-                if (nm) printf("%s\n", nm);
-            }
-            return 0;
-        }
         if (strcmp(a, "--config") == 0) {
-            if (i + 1 >= argc) {
-                fprintf(stderr, "tcd: --config requires a path argument\n");
-                return 2;
-            }
-            config_override = argv[++i];
-            continue;
+            return print_config_view();
         }
         if (a[0] == '-') {
             fprintf(stderr, "tcd: unknown option '%s'\n", a);
@@ -71,13 +182,29 @@ int main(int argc, char **argv) {
     }
 
     char err[256] = {0};
-    tcd_config *cfg = config_load(config_override, err, sizeof(err));
+    tcd_config *cfg = config_load(NULL, err, sizeof(err));
     if (!cfg) {
         fprintf(stderr, "tcd: %s\n", err[0] ? err : "config load failed");
         return 1;
     }
     if (err[0]) {
         fprintf(stderr, "tcd: warning: %s (continuing with defaults for invalid keys)\n", err);
+    }
+
+    if (initial) {
+        if (initial[0] == '@') {
+            const char *bookmark_name = initial + 1;
+            const char *bookmark_path = config_bookmark_get(cfg, bookmark_name);
+            if (!bookmark_path) {
+                fprintf(stderr, "tcd: no bookmark named '%s'\n", bookmark_name);
+                config_free(cfg);
+                return 1;
+            }
+            initial = bookmark_path;
+        } else if (!fs_is_dir(initial)) {
+            const char *bookmark_path = config_bookmark_get(cfg, initial);
+            if (bookmark_path) initial = bookmark_path;
+        }
     }
 
     if (initial && !fs_is_dir(initial)) {

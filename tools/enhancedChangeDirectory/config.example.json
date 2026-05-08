@@ -44,6 +44,12 @@
         "page_up":        ["pageup"],
         "page_down":      ["pagedown"],
         "toggle_hidden":  ["ctrl+h"],
-        "clear_filter":   ["ctrl+u"]
+        "clear_filter":   ["ctrl+u"],
+        "save_bookmark":  ["ctrl+s"]
+    },
+
+    "bookmarks": {
+        "tools":   "D:\\TOOLS\\TgnTools",
+        "configs": "C:\\Users\\me\\.config"
     }
 }

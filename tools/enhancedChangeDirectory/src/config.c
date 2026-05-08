@@ -91,6 +91,7 @@ static void apply_defaults(tcd_config *c) {
     keybind_set1(&c->k_page_down, "pagedown");
     keybind_set1(&c->k_toggle_hidden, "ctrl+h");
     keybind_set1(&c->k_clear_filter, "ctrl+u");
+    keybind_set1(&c->k_save_bookmark, "ctrl+s");
 }
 
 static void apply_keybind_from_json(tcd_keybind *kb, json_value *node) {
@@ -269,6 +270,59 @@ static void apply_keys(tcd_config *c, json_value *keys) {
     apply_keybind_from_json(&c->k_page_down,      json_get(keys, "page_down"));
     apply_keybind_from_json(&c->k_toggle_hidden,  json_get(keys, "toggle_hidden"));
     apply_keybind_from_json(&c->k_clear_filter,   json_get(keys, "clear_filter"));
+    apply_keybind_from_json(&c->k_save_bookmark,  json_get(keys, "save_bookmark"));
+}
+
+static int bookmarks_has_name(const tcd_config *c, const char *name) {
+    for (size_t i = 0; i < c->bookmarks.count; i++) {
+        if (strcmp(c->bookmarks.names[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+static void bookmarks_append(tcd_config *c, const char *name, const char *path) {
+    size_t new_count = c->bookmarks.count + 1;
+    char **names = (char **)realloc(c->bookmarks.names, new_count * sizeof(char *));
+    if (!names) return;
+    c->bookmarks.names = names;
+
+    char **paths = (char **)realloc(c->bookmarks.paths, new_count * sizeof(char *));
+    if (!paths) return;
+    c->bookmarks.paths = paths;
+
+    c->bookmarks.names[c->bookmarks.count] = xstrdup(name);
+    c->bookmarks.paths[c->bookmarks.count] = xstrdup(path);
+    c->bookmarks.count = new_count;
+}
+
+static void apply_bookmarks(tcd_config *c, json_value *root) {
+    json_value *bookmarks = json_get(root, "bookmarks");
+    if (!bookmarks || bookmarks->type != JSON_OBJECT) return;
+
+    size_t count = bookmarks->v.object.count;
+    if (count == 0) return;
+
+    c->bookmarks.names = (char **)calloc(count, sizeof(char *));
+    c->bookmarks.paths = (char **)calloc(count, sizeof(char *));
+    if (!c->bookmarks.names || !c->bookmarks.paths) return;
+
+    for (size_t i = 0; i < count; i++) {
+        json_value *value = bookmarks->v.object.values[i];
+        if (!value || value->type != JSON_STRING) continue;
+        c->bookmarks.names[c->bookmarks.count] = xstrdup(bookmarks->v.object.keys[i]);
+        c->bookmarks.paths[c->bookmarks.count] = xstrdup(value->v.string);
+        c->bookmarks.count++;
+    }
+}
+
+static void apply_default_bookmarks(tcd_config *c) {
+    if (!bookmarks_has_name(c, "tcd")) {
+        char *exe_dir = fs_exe_dir();
+        if (exe_dir) {
+            bookmarks_append(c, "tcd", exe_dir);
+            free(exe_dir);
+        }
+    }
 }
 
 static void apply_root(tcd_config *c, json_value *root) {
@@ -285,6 +339,7 @@ static void apply_root(tcd_config *c, json_value *root) {
     apply_str_from_json(&c->sort, root, "sort");
     resolve_theme(c, root);
     apply_keys(c, json_get(root, "keys"));
+    apply_bookmarks(c, root);
 }
 
 size_t config_built_in_theme_count(void) {
@@ -380,21 +435,24 @@ tcd_config *config_load(const char *override_path, char *err, size_t err_sz) {
 
     char *path_owned = config_resolve_path(override_path);
     const char *path = path_owned;
-    if (!path) return c;
 
-    char *src = read_all(path);
-    if (!src) { free(path_owned); return c; }
-
-    char perr[128] = {0};
-    json_value *root = json_parse(src, perr, sizeof(perr));
-    free(src);
-    if (!root) {
-        if (err && err_sz) snprintf(err, err_sz, "config %s: %s", path, perr);
-        free(path_owned);
-        return c;
+    if (path) {
+        char *src = read_all(path);
+        if (src) {
+            char perr[128] = {0};
+            json_value *root = json_parse(src, perr, sizeof(perr));
+            free(src);
+            if (root) {
+                apply_root(c, root);
+                json_free(root);
+            } else if (err && err_sz) {
+                snprintf(err, err_sz, "config %s: %s", path, perr);
+            }
+        }
     }
-    apply_root(c, root);
-    json_free(root);
+
+    apply_default_bookmarks(c);
+
     free(path_owned);
     return c;
 }
@@ -433,7 +491,76 @@ void config_free(tcd_config *c) {
     keybind_clear(&c->k_page_down);
     keybind_clear(&c->k_toggle_hidden);
     keybind_clear(&c->k_clear_filter);
+    keybind_clear(&c->k_save_bookmark);
+
+    for (size_t i = 0; i < c->bookmarks.count; i++) {
+        free(c->bookmarks.names[i]);
+        free(c->bookmarks.paths[i]);
+    }
+    free(c->bookmarks.names);
+    free(c->bookmarks.paths);
+
     free(c);
+}
+
+const char *config_bookmark_get(const tcd_config *c, const char *name) {
+    if (!c || !name) return NULL;
+    for (size_t i = 0; i < c->bookmarks.count; i++) {
+        if (strcmp(c->bookmarks.names[i], name) == 0) {
+            return c->bookmarks.paths[i];
+        }
+    }
+    return NULL;
+}
+
+int config_bookmark_save(const char *override_path, const char *name, const char *path) {
+    if (!name || !*name || !path || !*path) return -1;
+
+    char *resolved = config_resolve_path(override_path);
+    if (!resolved) return -1;
+
+    json_value *root = NULL;
+    char *src = read_all(resolved);
+    if (src) {
+        char err[128];
+        root = json_parse(src, err, sizeof(err));
+        free(src);
+    }
+    if (!root) {
+        root = json_make_object();
+        if (!root) { free(resolved); return -1; }
+    }
+    if (root->type != JSON_OBJECT) {
+        json_free(root);
+        root = json_make_object();
+        if (!root) { free(resolved); return -1; }
+    }
+
+    json_value *bookmarks = json_get(root, "bookmarks");
+    if (!bookmarks || bookmarks->type != JSON_OBJECT) {
+        bookmarks = json_make_object();
+        if (!bookmarks) { json_free(root); free(resolved); return -1; }
+        if (json_object_set(root, "bookmarks", bookmarks) != 0) {
+            json_free(bookmarks);
+            json_free(root);
+            free(resolved);
+            return -1;
+        }
+    }
+
+    json_value *path_value = json_make_string(path);
+    if (!path_value) { json_free(root); free(resolved); return -1; }
+    if (json_object_set(bookmarks, name, path_value) != 0) {
+        json_free(path_value);
+        json_free(root);
+        free(resolved);
+        return -1;
+    }
+
+    int rc = json_write_to_file(root, resolved);
+    json_free(root);
+    free(resolved);
+    return rc;
 }
 
 static int icmp(const char *a, const char *b) {
