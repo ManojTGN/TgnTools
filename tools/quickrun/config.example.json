@@ -1,0 +1,10 @@
+{
+    "log_file": "~/.quickrun/quickrun.log",
+
+    "bindings": [
+        { "keys": "ctrl+alt+t", "action": "run",  "command": "wt.exe" },
+        { "keys": "ctrl+alt+b", "action": "open", "target":  "https://github.com" },
+        { "keys": "ctrl+alt+e", "action": "open", "target":  "C:\\Users\\me" },
+        { "keys": "f1",         "action": "run",  "command": "tcd" }
+    ]
+}

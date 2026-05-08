@@ -1,0 +1,3 @@
+[submodule "tools/quickrun/vendor/uiohook"]
+	path = tools/quickrun/vendor/uiohook
+	url = https://github.com/kwhat/libuiohook.git

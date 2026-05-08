@@ -42,7 +42,7 @@ dkms.conf
 *.dwo
 
 # --- Go ---
-vendor/
+# (vendor/ intentionally not ignored — quickrun vendors libuiohook there)
 
 # --- Node.js / TypeScript ---
 node_modules/

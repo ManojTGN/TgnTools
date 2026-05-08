@@ -4,9 +4,10 @@ on:
     workflow_dispatch:
         inputs:
             tool:
-                description: "Tool name (directory under tools/)"
+                description: "Tool name (directory under tools/), or 'all'"
                 required: true
                 type: string
+                default: all
             version:
                 description: "Version label (defaults to short commit SHA)"
                 required: false
@@ -16,124 +17,176 @@ permissions:
     contents: read
 
 jobs:
+    plan:
+        name: Plan build matrix
+        runs-on: ubuntu-latest
+        outputs:
+            matrix: ${{ steps.gen.outputs.matrix }}
+            count:  ${{ steps.gen.outputs.count }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Generate matrix
+              id: gen
+              shell: bash
+              env:
+                  REQUESTED_TOOL: ${{ inputs.tool }}
+              run: |
+                  set -euo pipefail
+                  python3 - <<'PYEOF' > matrix.json
+                  import os, re, json, sys
+
+                  REQUESTED = os.environ.get("REQUESTED_TOOL", "all").strip()
+
+                  OS_TABLE = {
+                      "windows": {"os": "windows-latest", "os_label": "windows", "arch": "x64"},
+                      "linux":   {"os": "ubuntu-latest",  "os_label": "linux",   "arch": "x64"},
+                      "macos":   {"os": "macos-latest",   "os_label": "macos",   "arch": "arm64"},
+                  }
+
+                  if REQUESTED == "" or REQUESTED == "all":
+                      tools = sorted(d for d in os.listdir("tools") if os.path.isdir(f"tools/{d}"))
+                  else:
+                      tools = [REQUESTED]
+
+                  def read_field(path, key):
+                      pattern = re.compile(rf"^{re.escape(key)}:\s*(.*)$")
+                      with open(path, encoding="utf-8") as f:
+                          for line in f:
+                              m = pattern.match(line)
+                              if m:
+                                  v = m.group(1).strip().rstrip("\r")
+                                  return v.strip('"').strip("'")
+                      return None
+
+                  def parse_os_list(raw):
+                      if not raw:
+                          return list(OS_TABLE.keys())
+                      raw = raw.strip()
+                      if raw.startswith("[") and raw.endswith("]"):
+                          inner = raw[1:-1]
+                          return [s.strip().strip('"').strip("'")
+                                  for s in inner.split(",") if s.strip()]
+                      return [raw]
+
+                  matrix = []
+                  for tool in tools:
+                      manifest = f"tools/{tool}/tool.yml"
+                      if not os.path.exists(manifest):
+                          print(f"warning: no manifest at {manifest}", file=sys.stderr)
+                          continue
+
+                      lang   = read_field(manifest, "language") or "c"
+                      binary = read_field(manifest, "binary") or tool
+                      os_list = parse_os_list(read_field(manifest, "os"))
+
+                      for os_name in os_list:
+                          if os_name not in OS_TABLE:
+                              print(f"warning: unknown os '{os_name}' for {tool}", file=sys.stderr)
+                              continue
+                          matrix.append({
+                              "tool":     tool,
+                              "binary":   binary,
+                              "language": lang,
+                              **OS_TABLE[os_name],
+                          })
+
+                  print(json.dumps(matrix))
+                  PYEOF
+
+                  count=$(python3 -c 'import json,sys; print(len(json.load(open("matrix.json"))))')
+                  echo "Generated $count build jobs:"
+                  python3 -m json.tool matrix.json
+
+                  {
+                      echo "matrix=$(cat matrix.json)"
+                      echo "count=$count"
+                  } >> "$GITHUB_OUTPUT"
+
     build:
-        name: ${{ inputs.tool }} on ${{ matrix.os_label }}-${{ matrix.arch }}
+        name: ${{ matrix.binary }} on ${{ matrix.os_label }}-${{ matrix.arch }}
+        needs: plan
+        if: needs.plan.outputs.count != '0'
         runs-on: ${{ matrix.os }}
 
         strategy:
             fail-fast: false
             matrix:
-                include:
-                    - os:        ubuntu-latest
-                      os_label:  linux
-                      arch:      x64
-                    - os:        windows-latest
-                      os_label:  windows
-                      arch:      x64
-                    - os:        macos-latest
-                      os_label:  macos
-                      arch:      arm64
+                include: ${{ fromJSON(needs.plan.outputs.matrix) }}
 
         steps:
             - name: Checkout
               uses: actions/checkout@v4
+              with:
+                  submodules: recursive
 
-            - name: Resolve tool manifest
-              id: manifest
+            - name: Resolve version
+              id: ver
               shell: bash
               run: |
                   set -euo pipefail
-
-                  TOOL_DIR="tools/${{ inputs.tool }}"
-                  if [ ! -d "$TOOL_DIR" ]; then
-                      echo "::error::Tool '${{ inputs.tool }}' not found at $TOOL_DIR"
-                      exit 1
-                  fi
-
-                  MANIFEST="$TOOL_DIR/tool.yml"
-                  if [ ! -f "$MANIFEST" ]; then
-                      echo "::error::Missing manifest: $MANIFEST"
-                      exit 1
-                  fi
-
-                  LANGUAGE=$(grep -E '^language:' "$MANIFEST" | head -1 \
-                      | sed -E 's/^language:[[:space:]]*//' \
-                      | tr -d '"' | tr -d "'" | tr -d '\r')
-                  if [ -z "$LANGUAGE" ]; then
-                      echo "::error::No 'language:' field in $MANIFEST"
-                      exit 1
-                  fi
-
-                  BINARY=$(grep -E '^binary:' "$MANIFEST" | head -1 \
-                      | sed -E 's/^binary:[[:space:]]*//' \
-                      | tr -d '"' | tr -d "'" | tr -d '\r')
-                  if [ -z "$BINARY" ]; then
-                      BINARY="${{ inputs.tool }}"
-                  fi
-
-                  RESOLVED_VERSION="${{ inputs.version }}"
-                  if [ -z "$RESOLVED_VERSION" ]; then
-                      RESOLVED_VERSION="${GITHUB_SHA::7}"
-                  fi
-
-                  {
-                      echo "language=$LANGUAGE"
-                      echo "binary=$BINARY"
-                      echo "tool_dir=$TOOL_DIR"
-                      echo "version=$RESOLVED_VERSION"
-                  } >> "$GITHUB_OUTPUT"
-
-                  echo "Resolved tool=${{ inputs.tool }} binary=$BINARY language=$LANGUAGE version=$RESOLVED_VERSION"
+                  V="${{ inputs.version }}"
+                  [ -z "$V" ] && V="${GITHUB_SHA::7}"
+                  echo "version=$V" >> "$GITHUB_OUTPUT"
+                  echo "Building ${{ matrix.binary }} (${{ matrix.tool }}) on ${{ matrix.os_label }}-${{ matrix.arch }} as version $V"
 
             # ----- toolchain setup (only one runs, gated by language) -----
 
             - name: Setup Go
-              if: steps.manifest.outputs.language == 'go'
+              if: matrix.language == 'go'
               uses: actions/setup-go@v5
               with:
-                  go-version-file: ${{ steps.manifest.outputs.tool_dir }}/go.mod
+                  go-version-file: tools/${{ matrix.tool }}/go.mod
 
             - name: Setup Node.js
-              if: steps.manifest.outputs.language == 'node'
+              if: matrix.language == 'node'
               uses: actions/setup-node@v4
               with:
                   node-version: "20"
 
             - name: Setup Python
-              if: steps.manifest.outputs.language == 'python'
+              if: matrix.language == 'python'
               uses: actions/setup-python@v5
               with:
                   python-version: "3.12"
 
             - name: Setup Rust
-              if: steps.manifest.outputs.language == 'rust'
+              if: matrix.language == 'rust'
               uses: dtolnay/rust-toolchain@stable
 
-            # C/C++ and shell-based tools use the runner's pre-installed toolchain
+            # C/C++ tools rely on the runner's pre-installed compiler
             # (gcc on linux, clang on macos, MinGW gcc on windows-latest).
+
+            - name: Install Linux X11 dev libs (libuiohook-based tools)
+              if: matrix.os_label == 'linux' && matrix.language == 'c'
+              run: |
+                  sudo apt-get update -qq
+                  sudo apt-get install -y --no-install-recommends \
+                      libx11-dev libxtst-dev libxinerama-dev libxt-dev libxkbcommon-dev
 
             # ----- build -----
 
             - name: Build (POSIX)
               if: runner.os != 'Windows'
               shell: bash
-              working-directory: ${{ steps.manifest.outputs.tool_dir }}
+              working-directory: tools/${{ matrix.tool }}
               env:
-                  TOOL_NAME: ${{ steps.manifest.outputs.binary }}
+                  TOOL_NAME: ${{ matrix.binary }}
                   OS_LABEL:  ${{ matrix.os_label }}
                   ARCH:      ${{ matrix.arch }}
-                  VERSION:   ${{ steps.manifest.outputs.version }}
+                  VERSION:   ${{ steps.ver.outputs.version }}
               run: bash scripts/build.sh
 
             - name: Build (Windows)
               if: runner.os == 'Windows'
               shell: pwsh
-              working-directory: ${{ steps.manifest.outputs.tool_dir }}
+              working-directory: tools/${{ matrix.tool }}
               env:
-                  TOOL_NAME: ${{ steps.manifest.outputs.binary }}
+                  TOOL_NAME: ${{ matrix.binary }}
                   OS_LABEL:  ${{ matrix.os_label }}
                   ARCH:      ${{ matrix.arch }}
-                  VERSION:   ${{ steps.manifest.outputs.version }}
+                  VERSION:   ${{ steps.ver.outputs.version }}
               run: ./scripts/build.ps1
 
             # ----- artifact -----
@@ -141,7 +194,7 @@ jobs:
             - name: Upload artifact
               uses: actions/upload-artifact@v4
               with:
-                  name: ${{ steps.manifest.outputs.binary }}-${{ matrix.os_label }}-${{ matrix.arch }}
-                  path: ${{ steps.manifest.outputs.tool_dir }}/build/
+                  name: ${{ matrix.binary }}-${{ matrix.os_label }}-${{ matrix.arch }}
+                  path: tools/${{ matrix.tool }}/build/
                   if-no-files-found: error
                   retention-days: 30

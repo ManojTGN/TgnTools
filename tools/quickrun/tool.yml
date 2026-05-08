@@ -1,0 +1,10 @@
+name: quickrun
+binary: quickrun
+description: Cross-platform global-hotkey daemon - press a shortcut, run a command.
+language: c
+maintainer: ManojTGN
+
+# Restrict CI to Windows for now - tray UI is Windows-only and macOS/Linux
+# variants haven't been smoke-tested. Remove or expand when ready:
+#   os: [windows, linux, macos]
+os: [windows]
