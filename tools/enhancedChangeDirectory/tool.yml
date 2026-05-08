@@ -3,3 +3,5 @@ binary: tcd
 description: TGN CD — terminal directory navigator written in pure C (no third-party libs).
 language: c
 maintainer: ManojTGN
+
+os: [windows]

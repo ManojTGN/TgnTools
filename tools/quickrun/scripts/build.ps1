@@ -62,6 +62,7 @@ $uiohookSources = @(
 
 $includes = @(
     "-I$UiohookDir/include",
+    "-I$UiohookDir/src",
     "-I$UiohookDir/src/windows"
 )
 
