@@ -163,7 +163,9 @@ jobs:
               run: |
                   sudo apt-get update -qq
                   sudo apt-get install -y --no-install-recommends \
-                      libx11-dev libxtst-dev libxinerama-dev libxt-dev libxkbcommon-dev
+                      libx11-dev libxtst-dev libxinerama-dev libxt-dev libxrandr-dev \
+                      libxkbcommon-dev libxkbcommon-x11-dev \
+                      libxcb1-dev libxcb-xkb-dev
 
             # ----- build -----
 

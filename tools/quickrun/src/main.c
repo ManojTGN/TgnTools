@@ -28,6 +28,8 @@
 #  define QUICKRUN_COMMIT "unknown"
 #endif
 
+#define QUICKRUN_DETACHED_ENV L"QUICKRUN_DETACHED"
+
 static quickrun_config *g_config = NULL;
 
 #ifdef _WIN32
@@ -91,56 +93,133 @@ static unsigned __stdcall hook_thread_proc(void *arg) {
     (void)arg;
     int rc = hook_run();
     if (rc != UIOHOOK_SUCCESS) ql_log("hook_run returned %d", rc);
-    /* Tell the main-thread message loop to exit. */
     PostQuitMessage(0);
     return 0;
 }
 
-static void try_attach_parent_console(void) {
-    /*
-     * GUI-subsystem binaries do not allocate a console. If launched from cmd
-     * or PowerShell we can attach to the parent's console and route logs there
-     * for free. Failing to attach is fine - logs still flow to the log file.
-     */
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-        freopen("CONOUT$", "w", stdout);
-        freopen("CONOUT$", "w", stderr);
-    }
-}
+#define QUICKRUN_SINGLE_INSTANCE_NAME L"Local\\QuickrunSingleInstance"
 
-static int take_over_existing_instance(void) {
-    HWND existing = FindWindowW(L"QuickrunTrayWnd", NULL);
-    if (!existing) return 0;
+static HANDLE g_single_instance_mutex = NULL;
 
-    /* Tell the running instance to clean up and exit. */
-    SendMessageW(existing, WM_CLOSE, 0, 0);
-
-    /* Wait up to ~5 seconds for the previous instance to fully exit before
-     * we try to claim the tray slot ourselves. */
-    for (int i = 0; i < 50; i++) {
-        if (!FindWindowW(L"QuickrunTrayWnd", NULL)) return 1;
-        Sleep(100);
+int quickrun_acquire_single_instance(void) {
+    if (g_single_instance_mutex) return 1;
+    g_single_instance_mutex = CreateMutexW(NULL, FALSE, QUICKRUN_SINGLE_INSTANCE_NAME);
+    if (!g_single_instance_mutex) return 0;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(g_single_instance_mutex);
+        g_single_instance_mutex = NULL;
+        return 0;
     }
     return 1;
 }
-#endif
 
-#ifndef _WIN32
-static int detach_to_background(void) {
-    pid_t pid = fork();
-    if (pid < 0) return -1;
-    if (pid > 0) _exit(0); /* parent exits, returning shell prompt */
-    setsid();
-
-    /* Close stdio - everything goes to log_file from here on. */
-    int devnull = open("/dev/null", O_RDWR);
-    if (devnull >= 0) {
-        dup2(devnull, 0);
-        dup2(devnull, 1);
-        dup2(devnull, 2);
-        if (devnull > 2) close(devnull);
+void quickrun_release_single_instance(void) {
+    if (g_single_instance_mutex) {
+        CloseHandle(g_single_instance_mutex);
+        g_single_instance_mutex = NULL;
     }
-    return 0;
+}
+
+/*
+ * Probe-only check used by the launcher. SYNCHRONIZE access is permitted
+ * across UAC integrity levels with the default DACL/MIC policy, so a medium-IL
+ * launcher correctly observes a high-IL daemon's mutex.
+ */
+static int single_instance_exists(void) {
+    HANDLE h = OpenMutexW(SYNCHRONIZE, FALSE, QUICKRUN_SINGLE_INSTANCE_NAME);
+    if (!h) return 0;
+    CloseHandle(h);
+    return 1;
+}
+
+static int already_detached(void) {
+    wchar_t buf[8];
+    DWORD n = GetEnvironmentVariableW(QUICKRUN_DETACHED_ENV, buf,
+        sizeof(buf) / sizeof(buf[0]));
+    return n > 0;
+}
+
+/*
+ * Spawn ourselves with explorer.exe as the parent process. That's the only
+ * reliable way out of Windows Terminal's job object - CREATE_BREAKAWAY_FROM_JOB
+ * needs the parent job to allow breakaway, which WT's job does not.
+ *
+ * Re-parenting via PROC_THREAD_ATTRIBUTE_PARENT_PROCESS sets the new process's
+ * lineage to Explorer; whatever job WT had us in does not apply to the child.
+ */
+static HANDLE open_explorer_for_create(void) {
+    HWND shell = GetShellWindow();
+    if (!shell) return NULL;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(shell, &pid);
+    if (!pid) return NULL;
+    return OpenProcess(PROCESS_CREATE_PROCESS, FALSE, pid);
+}
+
+static int spawn_detached_self(void) {
+    wchar_t exe_path[MAX_PATH * 2];
+    DWORD n = GetModuleFileNameW(NULL, exe_path,
+        sizeof(exe_path) / sizeof(exe_path[0]));
+    if (n == 0 || n >= sizeof(exe_path) / sizeof(exe_path[0])) return -1;
+
+    wchar_t cmdline[MAX_PATH * 2 + 16];
+    swprintf(cmdline, sizeof(cmdline) / sizeof(cmdline[0]), L"\"%ls\"", exe_path);
+
+    SetEnvironmentVariableW(QUICKRUN_DETACHED_ENV, L"1");
+
+    int spawned = 0;
+
+    HANDLE explorer = open_explorer_for_create();
+    if (explorer) {
+        SIZE_T attr_size = 0;
+        InitializeProcThreadAttributeList(NULL, 1, 0, &attr_size);
+        LPPROC_THREAD_ATTRIBUTE_LIST attrs =
+            (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(attr_size);
+        if (attrs && InitializeProcThreadAttributeList(attrs, 1, 0, &attr_size)) {
+            if (UpdateProcThreadAttribute(attrs, 0,
+                    PROC_THREAD_ATTRIBUTE_PARENT_PROCESS,
+                    &explorer, sizeof(explorer), NULL, NULL))
+            {
+                STARTUPINFOEXW siex = { 0 };
+                siex.StartupInfo.cb  = sizeof(siex);
+                siex.lpAttributeList = attrs;
+                PROCESS_INFORMATION pi = { 0 };
+
+                if (CreateProcessW(NULL, cmdline, NULL, NULL, FALSE,
+                        EXTENDED_STARTUPINFO_PRESENT
+                        | DETACHED_PROCESS
+                        | CREATE_NEW_PROCESS_GROUP,
+                        NULL, NULL,
+                        (LPSTARTUPINFOW)&siex, &pi))
+                {
+                    CloseHandle(pi.hProcess);
+                    CloseHandle(pi.hThread);
+                    spawned = 1;
+                }
+            }
+            DeleteProcThreadAttributeList(attrs);
+        }
+        free(attrs);
+        CloseHandle(explorer);
+    }
+
+    /* Fallback: try CREATE_BREAKAWAY_FROM_JOB (works only if parent job allows). */
+    if (!spawned) {
+        STARTUPINFOW si = { 0 };
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi = { 0 };
+        if (CreateProcessW(NULL, cmdline, NULL, NULL, FALSE,
+                DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
+                NULL, NULL, &si, &pi))
+        {
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            spawned = 1;
+        }
+    }
+
+    SetEnvironmentVariableW(QUICKRUN_DETACHED_ENV, NULL);
+    return spawned ? 0 : -1;
 }
 #endif
 
@@ -152,12 +231,13 @@ static void print_usage(void) {
         "\n"
         "Options:\n"
         "  --config             print resolved config (path + contents)\n"
-        "  --foreground, -f     stay attached to terminal, no tray icon\n"
-#ifndef _WIN32
-        "  --detach, -d         fork+setsid into the background (POSIX)\n"
-#endif
         "  --version, -V        print version\n"
-        "  --help, -h           show this help\n");
+        "  --help, -h           show this help\n"
+        "\n"
+        "Default behavior (no args): launches detached in the background, with\n"
+        "a tray icon. Re-running quickrun while it's already running is a no-op.\n"
+        "Left-click the tray icon to open a console tailing the log file;\n"
+        "right-click for the menu (Open file location / Reload config / Quit).\n");
 }
 
 static int print_config_view(void) {
@@ -183,12 +263,20 @@ static int print_config_view(void) {
 
 int main(int argc, char **argv) {
 #ifdef _WIN32
-    try_attach_parent_console();
+    /*
+     * GUI-subsystem binary: Windows allocates no console for us, so Explorer
+     * launches stay flicker-free. For CLI flag invocations from cmd /
+     * PowerShell, we attach to the parent's console so printf reaches it.
+     * cmd does wait for direct child processes (regardless of subsystem),
+     * so the output appears in order before the next prompt.
+     */
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        freopen("CONOUT$", "w", stdout);
+        freopen("CONOUT$", "w", stderr);
+    }
 #endif
 
-    int foreground = 0;
-    int detach     = 0;
-
+    /* CLI flags - handled before any spawn / single-instance logic. */
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
 
@@ -203,14 +291,6 @@ int main(int argc, char **argv) {
         if (strcmp(a, "--config") == 0) {
             return print_config_view();
         }
-        if (strcmp(a, "--foreground") == 0 || strcmp(a, "-f") == 0) {
-            foreground = 1;
-            continue;
-        }
-        if (strcmp(a, "--detach") == 0 || strcmp(a, "-d") == 0) {
-            detach = 1;
-            continue;
-        }
         if (a[0] == '-') {
             fprintf(stderr, "quickrun: unknown option '%s'\n", a);
             return 2;
@@ -218,7 +298,34 @@ int main(int argc, char **argv) {
     }
 
 #ifdef _WIN32
-    int restarted = take_over_existing_instance();
+    if (!already_detached()) {
+        /* Launcher process. Two short-circuits:
+         *   1. a daemon is already running -> silent no-op
+         *   2. otherwise, spawn the detached child and exit
+         *
+         * When already elevated (e.g. invoked via "Run as administrator" from
+         * the tray, which uses ShellExecute "runas"), we skip the Explorer
+         * re-parent: Explorer runs at medium IL and re-parenting would drop
+         * our integrity level. ShellExecute "runas" already produces a process
+         * detached from any terminal job, so running inline is safe.
+         */
+        if (single_instance_exists()) {
+            return 0;
+        }
+        if (!tray_is_elevated()) {
+            if (spawn_detached_self() == 0) {
+                return 0;
+            }
+            /* Spawn failed (very unlikely). Fall through and run inline -
+             * note this instance may die with the parent if WT is the launcher. */
+        }
+    }
+
+    /* Daemon path - single-instance mutex guards against a race where two
+     * launchers raced through single_instance_exists() before either acquired. */
+    if (!quickrun_acquire_single_instance()) {
+        return 0;
+    }
 #endif
 
     char err[256] = {0};
@@ -234,13 +341,10 @@ int main(int argc, char **argv) {
         resolved_log_path = quickrun_default_log_path();
         log_path = resolved_log_path;
     }
-    ql_log_init(log_path, foreground);
+    /* No console attached - logs go to file only. */
+    ql_log_init(log_path, 0);
     if (log_path) ql_log("log file: %s", log_path);
     if (err[0])   ql_log("config warning: %s", err);
-
-#ifdef _WIN32
-    if (restarted) ql_log("replaced previous quickrun instance");
-#endif
 
     if (g_config->binding_count == 0) {
         ql_log("no bindings configured - quickrun has nothing to do. exiting.");
@@ -254,46 +358,38 @@ int main(int argc, char **argv) {
 
     CONFIG_LOCK_INIT();
 
-#ifndef _WIN32
-    if (detach) {
-        if (detach_to_background() != 0) {
-            ql_log("detach failed");
-            return 1;
-        }
-    }
-#else
-    (void)detach;
-#endif
-
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
 
     hook_set_dispatch_proc(dispatch_event);
 
 #ifdef _WIN32
-    if (foreground) {
-        ql_log("starting hook (foreground, ctrl+c to exit)");
+    /* Tell the tray module where to find the log so left-click can tail it. */
+    tray_set_log_path(log_path);
+
+    if (tray_init() != 0) {
+        ql_log("tray init failed - running hook headless");
         hook_run();
     } else {
-        ql_log("starting hook (tray icon - right-click to quit)");
-        if (tray_init() != 0) {
-            ql_log("tray init failed - falling back to foreground");
-            hook_run();
-        } else {
-            HANDLE thread = (HANDLE)_beginthreadex(NULL, 0, hook_thread_proc, NULL, 0, NULL);
-            if (!thread) {
-                ql_log("could not start hook thread");
-                tray_shutdown();
-                quickrun_config_free(g_config);
-                ql_log_close();
-                return 1;
-            }
-            tray_run_message_loop();
-            hook_stop();
-            WaitForSingleObject(thread, 5000);
-            CloseHandle(thread);
+        ql_log("daemon ready - tray icon is in the notification area");
+        HANDLE thread = (HANDLE)_beginthreadex(NULL, 0, hook_thread_proc, NULL, 0, NULL);
+        if (!thread) {
+            ql_log("could not start hook thread");
             tray_shutdown();
+            CONFIG_LOCK();
+            quickrun_config *to_free_early = g_config;
+            g_config = NULL;
+            CONFIG_UNLOCK();
+            quickrun_config_free(to_free_early);
+            ql_log_close();
+            free(resolved_log_path);
+            return 1;
         }
+        tray_run_message_loop();
+        hook_stop();
+        WaitForSingleObject(thread, 5000);
+        CloseHandle(thread);
+        tray_shutdown();
     }
 #else
     ql_log("starting hook");
@@ -308,5 +404,8 @@ int main(int argc, char **argv) {
     quickrun_config_free(to_free);
     ql_log_close();
     free(resolved_log_path);
+#ifdef _WIN32
+    quickrun_release_single_instance();
+#endif
     return 0;
 }

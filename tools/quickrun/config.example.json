@@ -3,7 +3,7 @@
 
     "bindings": [
         { "keys": "ctrl+alt+t", "action": "run",  "command": "wt.exe" },
-        { "keys": "ctrl+alt+b", "action": "open", "target":  "https://github.com" },
+        { "keys": "ctrl+g", "action": "open", "target":  "https://github.com/manojtgn" },
         { "keys": "ctrl+alt+e", "action": "open", "target":  "C:\\Users\\me" },
         { "keys": "f1",         "action": "run",  "command": "tcd" }
     ]

@@ -25,6 +25,10 @@ void ql_log_close(void) {
     }
 }
 
+void ql_log_set_stderr(int enable) {
+    g_log_stderr = enable ? 1 : 0;
+}
+
 static void write_timestamp(FILE *f) {
     time_t now = time(NULL);
     struct tm tm_buf;
