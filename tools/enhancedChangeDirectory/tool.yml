@@ -4,4 +4,4 @@ description: TGN CD — terminal directory navigator written in pure C (no third
 language: c
 maintainer: ManojTGN
 
-os: [windows]
+os: []
