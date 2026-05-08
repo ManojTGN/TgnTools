@@ -1,4 +1,5 @@
 # TgnTools
+<img src="tgntools.png" alt="tgntools">
 
 Personal mono-repo for cross-platform productivity, automation, and developer tools.
 Each tool lives in `tools/<name>/` and is independently buildable into Windows / macOS / Linux executables on demand via GitHub Actions.

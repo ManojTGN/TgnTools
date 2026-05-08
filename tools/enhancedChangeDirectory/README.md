@@ -1,5 +1,5 @@
 # tcd — TGN CD
-<img src="enhancedChangeDirectory.png" alt="tcd" width="160">
+<img src="enhancedChangeDirectory.png" alt="tcd">
 
 A terminal directory navigator in pure C. Browse, hit Ctrl+Enter, your shell `cd`s there. Windows / macOS / Linux. No third-party deps.
 

@@ -1,5 +1,5 @@
 # quickrun
-<img src="quickrun.png" alt="quickrun" width="160">
+<img src="quickrun.png" alt="quickrun">
 
 Cross-platform global-hotkey daemon. Press a shortcut anywhere, run a command. One C binary, JSON config, runs on Windows / macOS / Linux via libuiohook.
 
