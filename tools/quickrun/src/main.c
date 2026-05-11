@@ -1,4 +1,5 @@
 #include "action.h"
+#include "autostart.h"
 #include "config.h"
 #include "json.h"
 #include "keyspec.h"
@@ -231,6 +232,8 @@ static void print_usage(void) {
         "\n"
         "Options:\n"
         "  --config             print resolved config (path + contents)\n"
+        "  --install-autostart  register quickrun to start at user login\n"
+        "  --uninstall-autostart remove the autostart entry\n"
         "  --version, -V        print version\n"
         "  --help, -h           show this help\n"
         "\n"
@@ -238,6 +241,28 @@ static void print_usage(void) {
         "a tray icon. Re-running quickrun while it's already running is a no-op.\n"
         "Left-click the tray icon to open a console tailing the log file;\n"
         "right-click for the menu (Open file location / Reload config / Quit).\n");
+}
+
+static int run_install_autostart(void) {
+    char where[1024] = {0}, err[512] = {0};
+    if (quickrun_autostart_install(where, sizeof(where), err, sizeof(err)) != 0) {
+        fprintf(stderr, "quickrun: install-autostart failed: %s\n",
+            err[0] ? err : "(unknown)");
+        return 1;
+    }
+    printf("quickrun: autostart installed -> %s\n", where);
+    return 0;
+}
+
+static int run_uninstall_autostart(void) {
+    char where[1024] = {0}, err[512] = {0};
+    if (quickrun_autostart_uninstall(where, sizeof(where), err, sizeof(err)) != 0) {
+        fprintf(stderr, "quickrun: uninstall-autostart failed: %s\n",
+            err[0] ? err : "(unknown)");
+        return 1;
+    }
+    printf("quickrun: autostart removed -> %s\n", where);
+    return 0;
 }
 
 static int print_config_view(void) {
@@ -290,6 +315,12 @@ int main(int argc, char **argv) {
         }
         if (strcmp(a, "--config") == 0) {
             return print_config_view();
+        }
+        if (strcmp(a, "--install-autostart") == 0) {
+            return run_install_autostart();
+        }
+        if (strcmp(a, "--uninstall-autostart") == 0) {
+            return run_uninstall_autostart();
         }
         if (a[0] == '-') {
             fprintf(stderr, "quickrun: unknown option '%s'\n", a);

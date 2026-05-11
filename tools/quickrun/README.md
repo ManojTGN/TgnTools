@@ -43,10 +43,11 @@ Examples: `ctrl+alt+t`, `meta+space`, `shift+f5`, `ctrl+;`.
 ## CLI
 ```
 quickrun [OPTIONS]
-  --config             print resolved config (path + contents) in a styled panel
-  --foreground, -f     stay attached to terminal (don't daemonize)
-  --version, -V        print version
-  --help, -h           show this help
+  --config              print resolved config (path + contents) in a styled panel
+  --install-autostart   register quickrun to start at user login
+  --uninstall-autostart remove the autostart entry
+  --version, -V         print version
+  --help, -h            show this help
 ```
 
 ## Build

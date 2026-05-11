@@ -49,7 +49,8 @@ if (Test-Path 'icon.ico') {
 
 $ourSources = @(
     'src/main.c','src/config.c','src/json.c',
-    'src/keyspec.c','src/action.c','src/log.c','src/tray.c'
+    'src/keyspec.c','src/action.c','src/log.c','src/tray.c',
+    'src/autostart.c'
 )
 
 $uiohookSources = @(

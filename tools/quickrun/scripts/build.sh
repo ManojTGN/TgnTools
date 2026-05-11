@@ -79,7 +79,7 @@ echo "Building $TOOL_NAME ($OS_LABEL/$ARCH) with $CC, version=$VERSION commit=$C
     $PLATFORM_INC \
     -include "$OUT_DIR/_build_info.h" \
     -o "$OUT_DIR/$BIN" \
-    src/main.c src/config.c src/json.c src/keyspec.c src/action.c src/log.c src/tray.c \
+    src/main.c src/config.c src/json.c src/keyspec.c src/action.c src/log.c src/tray.c src/autostart.c \
     $PLATFORM_SRC \
     $ICON_OBJ \
     $PLATFORM_LIBS
